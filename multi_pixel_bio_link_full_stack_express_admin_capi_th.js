@@ -1,6 +1,6 @@
 // ===============================
 // Multi-Pixel BioLink — Full Stack (Express) + Admin + Users + CAPI (TH)
-// v4.7 — Fonts-anywhere + Sandbox Islands + true-blank saving + healthz
+// v4.6 — Media-safe sanitize (img/video/gif), link fix, non-blocking tracking, CAPI hashed user_data
 // ===============================
 
 const express = require("express");
@@ -19,12 +19,6 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "changeme";
 
-// ให้ Express เชื่อ proxy เพื่ออ่าน proto/host หลัง CDN ได้ถูก
-app.set("trust proxy", true);
-
-// --- Health check (Render/อื่นๆ) ---
-app.get("/healthz", (req, res) => res.status(200).send("OK"));
-
 // domain->tenant mapping: TENANT_DOMAIN_MAP="brand1:a.com,brand2:b.com"
 const TENANT_DOMAIN_MAP = Object.fromEntries(
   (process.env.TENANT_DOMAIN_MAP || "")
@@ -41,27 +35,28 @@ const TENANT_DOMAIN_MAP = Object.fromEntries(
 const DB_PATH = path.join(process.cwd(), "db.json");
 const nanoid = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 16);
 
-// ค่าตั้งต้นแบบ "ว่าง" (ไม่ยัดข้อความ/โลโก้/ลิงก์ให้เอง)
 function defaultTenantConfig() {
   return {
-    theme: "", // ใส่เองได้ (ว่างก็ได้)
+    theme: "violet",
     profile: {
-      displayName: "",
-      bio: "",
-      avatar: "",
-      cover: "",
+      displayName: "shopee",
+      bio: "ซื้อทุกอย่างที่ Shopee ช้อปปี้ ช้อปปิ้งออนไลน์ยอดนิยม รวมสินค้ามากมาย มีโค้ดส่วนลดจัดเต็ม อัพเดททุกวัน ช้อปเลย Shopee เพลิดเพลินกับการช้อปปิ้งออนไลน์ แบบไม่มีสะดุด สินค้าหลากหลาย มีทุกหมวดหมู่ ช้อปเลย ช้อปปิ้งออนไลน์ Shopee ช้อปง่าย...",
+      avatar:
+        "https://img2.pic.in.th/pic/4a5ec8baa41984eebc7a4ecc10db3d80.png",
+      cover:
+        "https://img2.pic.in.th/pic/4a5ec8baa41984eebc7a4ecc10db3d80.png",
       background: { type: "gradient", from: "#0f172a", to: "#020617", image: "" },
     },
     footer: "",
-    badges: [],
+    badges: [{ text: "โปรแรงวันนี้", href: "#promo", emoji: "🔥" }],
 
     pixelsSimple: {
-      facebook: [],
-      tiktok: [],
-      ga4: [],
-      gtm: [],
-      googleAds: [],
-      twitter: [],
+      facebook: Array(10).fill(""),
+      tiktok: Array(10).fill(""),
+      ga4: Array(10).fill(""),
+      gtm: Array(10).fill(""),
+      googleAds: Array(10).fill(""),
+      twitter: Array(10).fill(""),
     },
     pixelsAdvanced: {
       facebook: [{ pixelId: "", accessToken: "", testEventCode: "" }],
@@ -69,24 +64,38 @@ function defaultTenantConfig() {
       tiktok: [{ pixelCode: "", accessToken: "" }],
     },
 
-    // โค้ดภายนอก/หัว-ท้ายเพจ + UI font options
     customBundles: [],
     customHead: "",
     customBodyEnd: "",
-    ui: {
-      fontLinks: [], // ตัวอย่าง: ["https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap"]
-      fontFamily:
-        "", // ตัวอย่าง: 'Sarabun, system-ui, -apple-system, "Prompt", "Noto Sans Thai", sans-serif'
-    },
 
-    gallery: [],
-    links: [],
+    gallery: [
+      "https://images.unsplash.com/photo-1541829070764-84a7d30dd3f8?q=80&w=1200&auto=format&fit=crop",
+    ],
+    links: [
+      {
+        title: "สมัครสมาชิก",
+        url: "https://example.com/register",
+        icon: "⭐",
+        highlight: true,
+        utm: { source: "bio", medium: "link", campaign: "signup" },
+        eventName: "ClickRegister",
+      },
+      {
+        title: "ไลน์แอด (ดูโปร)",
+        url: "https://line.me/R/ti/p/@yourline",
+        icon: "💬",
+        eventName: "ClickLINE",
+      },
+    ],
   };
 }
 
 function defaultDB() {
   return {
-    tenants: { default: defaultTenantConfig() },
+    tenants: {
+      default: defaultTenantConfig(),
+    },
+    // users[userSlug] = { tenant:'default', ...same shape as tenant config... }
     users: {},
   };
 }
@@ -103,20 +112,11 @@ function writeDB(data) {
 
 // ===== Utils =====
 function getClientIP(req) {
-  return (
-    (req.headers["x-forwarded-for"] || "").split(",")[0] ||
-    req.socket.remoteAddress ||
-    ""
-  );
+  return (req.headers["x-forwarded-for"] || "").split(",")[0] || req.socket.remoteAddress || "";
 }
 function sha256(s) {
-  return crypto
-    .createHash("sha256")
-    .update(String(s || "").trim().toLowerCase())
-    .digest("hex");
+  return crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
 }
-// ใช้เซ็ตค่าให้รองรับ "ค่าว่าง" ที่ส่งมา (ไม่ fallback ทับ)
-const pick = (val, prev) => (typeof val !== "undefined" ? val : prev);
 
 // ===== Sanitize: allow media (img/video/gif), keep scripts https-only, safe anchors =====
 function sanitize(html) {
@@ -237,15 +237,27 @@ function sanitize(html) {
       },
       video(tag, attribs) {
         const src = attribs.src || "";
-        if (src && !/^https?:\/\//i.test(src) && !/^blob:/i.test(src) && !/^data:video\//i.test(src))
+        if (
+          src &&
+          !/^https?:\/\//i.test(src) &&
+          !/^blob:/i.test(src) &&
+          !/^data:video\//i.test(src)
+        ) {
           delete attribs.src;
+        }
         if ("autoplay" in attribs) attribs.playsinline = "playsinline";
         return { tagName: "video", attribs };
       },
       audio(tag, attribs) {
         const src = attribs.src || "";
-        if (src && !/^https?:\/\//i.test(src) && !/^blob:/i.test(src) && !/^data:audio\//i.test(src))
+        if (
+          src &&
+          !/^https?:\/\//i.test(src) &&
+          !/^blob:/i.test(src) &&
+          !/^data:audio\//i.test(src)
+        ) {
           delete attribs.src;
+        }
         return { tagName: "audio", attribs };
       },
       script(tag, attribs) {
@@ -331,8 +343,7 @@ app.get("/admin/login", (req, res) => {
 <input type=password name=password placeholder="รหัสผ่าน" class="w-full p-3 rounded bg-white/10 mb-3"/>
 <button class="w-full p-3 rounded bg-sky-500 hover:bg-sky-400">เข้าสู่ระบบ</button>
 <p class="mt-3 text-xs text-white/70">ค่าเริ่มต้น: changeme</p>
-</form></body></html>`);
-});
+</form></body></html>`);});
 app.post("/admin/login", (req, res) => {
   const { password } = req.body || {};
   if (password === ADMIN_PASSWORD) {
@@ -360,10 +371,9 @@ app.get("/admin", requireAdmin, (req, res) => {
 <div class="grid gap-1.5 max-w-md">
 ${ten
   .map(
-    (t) => `<div class="flex gap-1.5">
-  <a class="flex-1 p-2.5 rounded bg-white/10 hover:bg-white/20" href="/admin/${t}">${t}</a>
-  ${t==='default'?'':`<form method="post" action="/admin/${t}/delete" onsubmit="return confirm('ลบแบรนด์นี้?')"><button class="px-3 py-1.5 rounded bg-rose-500 text-sm">ลบ</button></form>`}
-</div>`
+    (t) => `<div class="flex gap-1.5">  <a class="flex-1 p-2.5 rounded bg-white/10 hover:bg-white/20" href="/admin/${t}">${t}</a>
+  ${t==='default'?'':`<form method="post" action="/admin/${t}/delete" onsubmit="return confirm('ลบแบรนด์นี้?')">    <button class="px-3 py-1.5 rounded bg-rose-500 text-sm">ลบ</button>
+  </form>`}</div>`
   )
   .join("")}
 </div>
@@ -372,7 +382,6 @@ ${ten
 <h2 class="font-semibold mb-2">สร้างแบรนด์ใหม่</h2>
 <input name=slug placeholder="slug เช่น brand2" class="w-full p-2 rounded bg-white/10 mb-2" required/>
 <button class="px-3 py-2 rounded bg-sky-500">สร้าง</button>
-<p class="text-xs opacity-70 mt-1">* ค่าตั้งต้นเป็นค่าว่างทั้งหมด</p>
 </form>
 
 <div class="mt-6 max-w-3xl">
@@ -384,8 +393,7 @@ ${ten
     ${Object.entries(db.users)
       .map(
         ([slug, u]) =>
-          `<div class="p-2.5 bg-white/10 rounded flex items-center justify-between">
-             <div><div class="font-medium">${slug}</div>
+          `<div class="p-2.5 bg-white/10 rounded flex items-center justify-between">            <div><div class="font-medium">${slug}</div>
              <div class="text-xs opacity-80">${u.tenant} — <a class="underline" target=_blank href="/${u.tenant}/${slug}">/${u.tenant}/${slug}</a></div></div>
              <form method="post" action="/admin/users/${slug}/delete" onsubmit="return confirm('ลบสมาชิกนี้?')">
                <button class="px-2 py-1 bg-rose-500 rounded text-sm">ลบ</button>
@@ -395,14 +403,13 @@ ${ten
       .join("")}
   </div>
 </div>
-</body></html>`);
-});
+</body></html>`);});
 app.post("/admin/create-tenant", requireAdmin, (req, res) => {
   const { slug } = req.body || {};
   if (!slug) return res.status(400).send("กรุณาใส่ slug");
   const db = readDB();
   if (db.tenants[slug]) return res.redirect("/admin/" + slug);
-  db.tenants[slug] = defaultTenantConfig(); // ว่างหมด
+  db.tenants[slug] = defaultTenantConfig();
   writeDB(db);
   res.redirect("/admin/" + slug);
 });
@@ -435,18 +442,17 @@ app.get("/admin/users", requireAdmin, (req, res) => {
     <select name="tenant" class="p-2 rounded bg-white/10">${tenants
       .map((t) => `<option value="${t}">${t}</option>`)
       .join("")}</select>
-    <button class="px-3 py-2 rounded bg-emerald-500">สร้าง (ก๊อปค่าจากแบรนด์)</button>
+    <button class="px-3 py-2 rounded bg-emerald-500">สร้าง (ก็อปจาก config ของแบรนด์)</button>
   </div>
 </form>
 
 <div class="mt-4 grid gap-1.5 max-w-3xl">
 ${Object.entries(db.users)
   .map(
-    ([slug, u]) => `<div class="p-2.5 bg-white/10 rounded flex items-center justify-between">
-      <div>
+    ([slug, u]) => `<div class="p-2.5 bg-white/10 rounded flex items-center justify-between">      <div>
         <div class="font-medium">${slug}</div>
-        <div class="text-xs opacity-80">${u.tenant} —
-          <a class="underline" target=_blank href="/${u.tenant}/${slug}">/${u.tenant}/${slug}</a> |
+        <div class="text-xs opacity-80">${u.tenant} — 
+          <a class="underline" target=_blank href="/${u.tenant}/${slug}">/${u.tenant}/${slug}</a> | 
           <a class="underline" href="/admin/user/${slug}">ตั้งค่า</a>
         </div>
       </div>
@@ -457,8 +463,7 @@ ${Object.entries(db.users)
   )
   .join("")}
 </div>
-</body></html>`);
-});
+</body></html>`);});
 app.post("/admin/users/create", requireAdmin, (req, res) => {
   const { slug, tenant } = req.body || {};
   if (!slug || !tenant) return res.status(400).send("ข้อมูลไม่ครบ");
@@ -478,8 +483,7 @@ app.post("/admin/users/:slug/delete", requireAdmin, (req, res) => {
 function renderPixelInputsHtml(arr, name, label, esc) {
   const a = (arr || []).slice(0, 10);
   while (a.length < 10) a.push("");
-  return `<div class="bg-white/5 p-2.5 rounded">
-    <div class="font-medium mb-2">${label} (สูงสุด 10)</div>
+  return `<div class="bg-white/5 p-2.5 rounded">    <div class="font-medium mb-2">${label} (สูงสุด 10)</div>
     ${a.map((v,i)=>`<input name="${name}[${i}]" value="${esc(v)}" placeholder="ช่องที่ ${i+1}" class="w-full p-2 rounded bg-white/10 mb-1.5">`).join("")}
   </div>`;
 }
@@ -502,9 +506,8 @@ app.get("/admin/:tenant", requireAdmin, (req,res)=>{
   <input name="bio" value="${esc(cfg.profile?.bio)}" class="w-full p-2 rounded bg-white/10 mb-2" placeholder="คำบรรยาย"/>
   <input name="avatar" value="${esc(cfg.profile?.avatar)}" class="w-full p-2 rounded bg-white/10 mb-2" placeholder="Avatar URL"/>
   <input name="cover" value="${esc(cfg.profile?.cover)}" class="w-full p-2 rounded bg-white/10 mb-2" placeholder="Cover URL"/>
-
   <div class="grid grid-cols-2 gap-1.5">
-    <input name="theme" value="${esc(cfg.theme||'')}" class="p-2 rounded bg-white/10" placeholder="เช่น violet/emerald/crimson (เว้นว่างได้)"/>
+    <input name="theme" value="${esc(cfg.theme||'violet')}" class="p-2 rounded bg-white/10" placeholder="theme"/>
     <input name="bgType" value="${esc(cfg.profile?.background?.type||'gradient')}" class="p-2 rounded bg-white/10" placeholder="gradient|image"/>
   </div>
   <div class="grid grid-cols-3 gap-1.5 mt-1.5">
@@ -512,8 +515,7 @@ app.get("/admin/:tenant", requireAdmin, (req,res)=>{
     <input name="bgTo" value="${esc(cfg.profile?.background?.to||'#020617')}" class="p-2 rounded bg-white/10" placeholder="to"/>
     <input name="bgImage" value="${esc(cfg.profile?.background?.image||'')}" class="w-full p-2 rounded bg-white/10" placeholder="image url"/>
   </div>
-
-  <input name="footer" value="${esc(cfg.footer)}" class="w-full p-2 rounded bg-white/10 mt-2" placeholder="Footer (เว้นว่างได้)"/>
+  <input name="footer" value="${esc(cfg.footer)}" class="w-full p-2 rounded bg-white/10 mt-2" placeholder="Footer"/>
   <button class="px-3 py-2 rounded bg-sky-600 mt-2">บันทึก</button>
 </form>
 
@@ -543,20 +545,20 @@ app.get("/admin/:tenant", requireAdmin, (req,res)=>{
 <div class="bg-white/10 p-3 rounded">
   <h2 class="font-semibold mb-2">รายการก้อนโค้ด</h2>
   <div class="grid gap-2">
-    ${(cfg.customBundles||[]).map((code,i)=>`
-      <div class="bg-white/5 p-2.5 rounded">
+    ${(cfg.customBundles||[]).map((code,i)=>      `<div class="bg-white/5 p-2.5 rounded">
         <div class="text-xs opacity-80 mb-1">Bundle #${i+1}</div>
         <form method="post" action="/admin/${tenant}/bundle/update" class="grid gap-1.5">
           <input type="hidden" name="idx" value="${i}">
           <textarea name="bundle" class="w-full p-2 rounded bg-white/10" style="min-height:140px">${esc(code)}</textarea>
-          <div class="flex gap-1.5"><button class="px-3 py-2 rounded bg-sky-600">บันทึก</button></div>
+          <div class="flex gap-1.5">
+            <button class="px-3 py-2 rounded bg-sky-600">บันทึก</button>
+          </div>
         </form>
         <form method="post" action="/admin/${tenant}/bundle/delete" class="mt-1.5" onsubmit="return confirm('ลบก้อนนี้?')">
           <input type="hidden" name="idx" value="${i}">
           <button class="px-3 py-2 rounded bg-rose-600">ลบ</button>
         </form>
-      </div>`).join("")}
-  </div>
+      </div>`).join("")}  </div>
 </div>
 
 <div class="bg-white/10 p-3 rounded">
@@ -573,16 +575,14 @@ app.get("/admin/:tenant", requireAdmin, (req,res)=>{
     <button class="px-3 py-2 rounded bg-emerald-600">เพิ่มลิงก์</button>
   </form>
   <div class="mt-3 grid gap-1.5">
-    ${(cfg.links||[]).map((l,i)=>`
-      <div class="p-2.5 bg-white/5 rounded flex items-center justify-between">
+    ${(cfg.links||[]).map((l,i)=>      `<div class="p-2.5 bg-white/5 rounded flex items-center justify-between">
         <div><div class="font-medium">${esc(l.title)}</div>
         <div class="text-xs opacity-80">${esc(l.url)}</div></div>
         <form method=post action="/admin/${tenant}/links/del" onsubmit="return confirm('ลบลิงก์นี้?')">
           <input type=hidden name=idx value="${i}"/>
           <button class="px-2 py-1 rounded bg-rose-600 text-sm">ลบ</button>
         </form>
-      </div>`).join("")}
-  </div>
+      </div>`).join("")}  </div>
 </div>
 
 <div class="bg-white/10 p-3 rounded">
@@ -592,37 +592,32 @@ app.get("/admin/:tenant", requireAdmin, (req,res)=>{
     <button class="px-3 py-2 rounded bg-indigo-600">เพิ่มรูป</button>
   </form>
   <div class="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-    ${(cfg.gallery||[]).map((u,i)=>`
-      <div class="bg-white/5 p-1.5 rounded">
+    ${(cfg.gallery||[]).map((u,i)=>      `<div class="bg-white/5 p-1.5 rounded">
         <img src="${esc(u)}" class="w-full h-24 object-cover rounded" loading="lazy" referrerpolicy="no-referrer"/>
         <form method=post action="/admin/${tenant}/gallery/del" class="mt-1.5" onsubmit="return confirm('ลบรูปนี้?')">
           <input type=hidden name=idx value="${i}"/>
           <button class="px-2 py-1 rounded bg-rose-600 text-sm">ลบ</button>
         </form>
-      </div>`).join("")}
-  </div>
+      </div>`).join("")}  </div>
 </div>
 
 </div>
-</body></html>`);
-});
-
-// บันทึกโปรไฟล์ (รองรับค่าว่าง)
+</body></html>`);});
 app.post("/admin/:tenant/profile", requireAdmin, (req,res)=>{
   const t = req.params.tenant; const cfg = getTenantConfig(t); if(!cfg) return res.status(404).send("no tenant");
-  cfg.theme = pick(req.body.theme, cfg.theme);
+  cfg.theme = req.body.theme || cfg.theme;
   cfg.profile = cfg.profile || {};
-  cfg.profile.displayName = pick(req.body.displayName, cfg.profile.displayName);
-  cfg.profile.bio = pick(req.body.bio, cfg.profile.bio);
-  cfg.profile.avatar = pick(req.body.avatar, cfg.profile.avatar);
-  cfg.profile.cover = pick(req.body.cover, cfg.profile.cover);
+  cfg.profile.displayName = req.body.displayName || cfg.profile.displayName;
+  cfg.profile.bio = req.body.bio || cfg.profile.bio;
+  cfg.profile.avatar = req.body.avatar || cfg.profile.avatar;
+  cfg.profile.cover = req.body.cover || cfg.profile.cover;
   cfg.profile.background = {
-    type: req.body.bgType ?? (cfg.profile.background?.type ?? "gradient"),
-    from: req.body.bgFrom ?? (cfg.profile.background?.from ?? "#0f172a"),
-    to: req.body.bgTo ?? (cfg.profile.background?.to ?? "#020617"),
-    image: req.body.bgImage ?? (cfg.profile.background?.image ?? ""),
+    type: req.body.bgType || "gradient",
+    from: req.body.bgFrom || "#0f172a",
+    to: req.body.bgTo || "#020617",
+    image: req.body.bgImage || "",
   };
-  cfg.footer = pick(req.body.footer, cfg.footer);
+  cfg.footer = req.body.footer || cfg.footer;
   saveTenantConfig(t, cfg); res.redirect("/admin/"+t);
 });
 app.post("/admin/:tenant/pixels-simple", requireAdmin, (req,res)=>{
@@ -647,20 +642,18 @@ app.post("/admin/:tenant/bundle/add", requireAdmin, (req,res)=>{
 });
 app.post("/admin/:tenant/bundle/update", requireAdmin, (req,res)=>{
   const t=req.params.tenant; const cfg=getTenantConfig(t); const idx=parseInt(req.body.idx,10);
-  if(!cfg.customBundles?.[idx] && cfg.customBundles?.[idx] !== "") return res.status(400).send("index ผิด");
+  if(!cfg.customBundles?.[idx]) return res.status(400).send("index ผิด");
   cfg.customBundles[idx]=sanitize(req.body.bundle||""); saveTenantConfig(t,cfg); res.redirect("/admin/"+t);
 });
 app.post("/admin/:tenant/bundle/delete", requireAdmin, (req,res)=>{
   const t=req.params.tenant; const cfg=getTenantConfig(t); const idx=parseInt(req.body.idx,10);
-  if(!isFinite(idx)) return res.status(400).send("index ผิด");
-  (cfg.customBundles||[]).splice(idx,1); saveTenantConfig(t,cfg); res.redirect("/admin/"+t);
+  if(!cfg.customBundles?.[idx]) return res.status(400).send("index ผิด");
+  cfg.customBundles.splice(idx,1); saveTenantConfig(t,cfg); res.redirect("/admin/"+t);
 });
 app.post("/admin/:tenant/links/add", requireAdmin, (req,res)=>{
   const t=req.params.tenant; const cfg=getTenantConfig(t); let utm={}; try{ utm=req.body.utm?JSON.parse(req.body.utm):{} }catch{}
-  cfg.links=cfg.links||[]; cfg.links.push({
-    title:req.body.title||'', url:req.body.url||'', icon:req.body.icon||'🔗',
-    badge:req.body.badge||'', highlight:!!req.body.highlight, utm, eventName:req.body.eventName||'LinkClick'
-  });
+  cfg.links=cfg.links||[]; cfg.links.push({ title:req.body.title||'', url:req.body.url||'', icon:req.body.icon||'🔗',
+    badge:req.body.badge||'', highlight:!!req.body.highlight, utm, eventName:req.body.eventName||'LinkClick' });
   saveTenantConfig(t,cfg); res.redirect("/admin/"+t);
 });
 app.post("/admin/:tenant/links/del", requireAdmin, (req,res)=>{
@@ -688,9 +681,13 @@ app.get("/admin/user/:slug", requireAdmin, (req, res) => {
   function renderPixelInputs(arr, name, label) {
     const a = (arr || []).slice(0, 10);
     while (a.length < 10) a.push("");
-    return `<div class="bg-white/5 p-2.5 rounded">
-      <div class="font-medium mb-2">${label} (สูงสุด 10)</div>
-      ${a.map((v,i)=>`<input name="${name}[${i}]" value="${esc(v)}" placeholder="ช่องที่ ${i+1}" class="w-full p-2 rounded bg-white/10 mb-1.5">`).join("")}
+    return `<div class="bg-white/5 p-2.5 rounded">      <div class="font-medium mb-2">${label} (สูงสุด 10)</div>
+      ${a
+        .map(
+          (v, i) =>
+            `<input name="${name}[${i}]" value="${esc(v)}" placeholder="ช่องที่ ${i + 1}" class="w-full p-2 rounded bg-white/10 mb-1.5">`
+        )
+        .join("")}
     </div>`;
   }
   res.type("html").send(`<!doctype html><html lang=th><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
@@ -714,9 +711,9 @@ app.get("/admin/user/:slug", requireAdmin, (req, res) => {
   <input name="cover" value="${esc(cfg.profile?.cover)}" class="w-full p-2 rounded bg-white/10 mb-2"/>
 
   <div class="grid grid-cols-2 gap-1.5">
-    <div><label class=text-sm>ธีม</label>
-    <input name="theme" value="${esc(cfg.theme||'')}" class="w-full p-2 rounded bg-white/10 mb-2"/></div>
-    <div><label class=text-sm>พื้นหลัง</label>
+    <div><label class=text-sm>ธีม (violet|emerald|crimson)</label>
+    <input name="theme" value="${esc(cfg.theme)}" class="w-full p-2 rounded bg-white/10 mb-2"/></div>
+    <div><label class=text-sm>พื้นหลัง (gradient|image)</label>
     <input name="bgType" value="${esc(cfg.profile?.background?.type||'gradient')}" class="w-full p-2 rounded bg-white/10 mb-2"/></div>
   </div>
 
@@ -757,8 +754,7 @@ app.get("/admin/user/:slug", requireAdmin, (req, res) => {
 <div class="bg-white/10 p-3 rounded">
   <h2 class="font-semibold mb-2">รายการก้อนโค้ด</h2>
   <div class="grid gap-2">
-    ${(cfg.customBundles||[]).map((code,i)=>`
-      <div class="bg-white/5 p-2.5 rounded">
+    ${(cfg.customBundles||[]).map((code,i)=>      `<div class="bg-white/5 p-2.5 rounded">
         <div class="text-xs opacity-80 mb-1">Bundle #${i+1}</div>
         <form method="post" action="/admin/user/${slug}/bundle/update" class="grid gap-1.5">
           <input type="hidden" name="idx" value="${i}">
@@ -771,8 +767,7 @@ app.get("/admin/user/:slug", requireAdmin, (req, res) => {
           <input type="hidden" name="idx" value="${i}">
           <button class="px-3 py-2 rounded bg-rose-500">ลบ</button>
         </form>
-      </div>`).join("")}
-  </div>
+      </div>`).join("")}  </div>
 </div>
 
 <div class="bg-white/10 p-3 rounded">
@@ -789,16 +784,14 @@ app.get("/admin/user/:slug", requireAdmin, (req, res) => {
     <button class="px-3 py-2 rounded bg-emerald-500">เพิ่มลิงก์</button>
   </form>
   <div class="mt-3 grid gap-1.5">
-    ${(cfg.links||[]).map((l,i)=>`
-      <div class="p-2.5 bg-white/5 rounded flex items-center justify-between">
+    ${(cfg.links||[]).map((l,i)=>      `<div class="p-2.5 bg-white/5 rounded flex items-center justify-between">
         <div><div class="font-medium">${esc(l.title)}</div>
         <div class="text-xs opacity-80">${esc(l.url)}</div></div>
         <form method=post action="/admin/user/${slug}/links/del" onsubmit="return confirm('ลบลิงก์นี้?')">
           <input type=hidden name=idx value="${i}"/>
           <button class="px-2 py-1 rounded bg-rose-500">ลบ</button>
         </form>
-      </div>`).join("")}
-  </div>
+      </div>`).join("")}  </div>
 </div>
 
 <div class="bg-white/10 p-3 rounded">
@@ -808,39 +801,36 @@ app.get("/admin/user/:slug", requireAdmin, (req, res) => {
     <button class="px-3 py-2 rounded bg-indigo-500">เพิ่มรูป</button>
   </form>
   <div class="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">
-    ${(cfg.gallery||[]).map((u,i)=>`
-      <div class="bg-white/5 p-1.5 rounded">
+    ${(cfg.gallery||[]).map((u,i)=>      `<div class="bg-white/5 p-1.5 rounded">
         <img src="${esc(u)}" class="w-full h-28 object-cover rounded" loading="lazy" referrerpolicy="no-referrer"/>
         <form method=post action="/admin/user/${slug}/gallery/del" class="mt-1.5" onsubmit="return confirm('ลบรูปนี้?')">
           <input type=hidden name=idx value="${i}"/>
           <button class="px-2 py-1 rounded bg-rose-500 text-sm">ลบ</button>
         </form>
-      </div>`).join("")}
-  </div>
+      </div>`).join("")}  </div>
 </div>
 
 </div>
-</body></html>`);
-});
+</body></html>`);});
 
-// user actions (รองรับค่าว่าง)
+// user actions
 app.post("/admin/user/:slug/profile", requireAdmin, (req, res) => {
   const slug = req.params.slug;
   const u = getUser(slug);
   if (!u) return res.status(404).send("ไม่พบผู้ใช้");
-  u.theme = pick(req.body.theme, u.theme);
+  u.theme = req.body.theme || u.theme;
   u.profile = u.profile || {};
-  u.profile.displayName = pick(req.body.displayName, u.profile.displayName);
-  u.profile.bio = pick(req.body.bio, u.profile.bio);
-  u.profile.avatar = pick(req.body.avatar, u.profile.avatar);
-  u.profile.cover = pick(req.body.cover, u.profile.cover);
+  u.profile.displayName = req.body.displayName || u.profile.displayName;
+  u.profile.bio = req.body.bio || u.profile.bio;
+  u.profile.avatar = req.body.avatar || u.profile.avatar;
+  u.profile.cover = req.body.cover || u.profile.cover;
   u.profile.background = {
-    type: req.body.bgType ?? (u.profile.background?.type ?? "gradient"),
-    from: req.body.bgFrom ?? (u.profile.background?.from ?? "#0f172a"),
-    to: req.body.bgTo ?? (u.profile.background?.to ?? "#020617"),
-    image: req.body.bgImage ?? (u.profile.background?.image ?? ""),
+    type: req.body.bgType || "gradient",
+    from: req.body.bgFrom || "#0f172a",
+    to: req.body.bgTo || "#020617",
+    image: req.body.bgImage || "",
   };
-  u.footer = pick(req.body.footer, u.footer);
+  u.footer = req.body.footer || u.footer;
   saveUser(slug, u);
   res.redirect("/admin/user/" + slug);
 });
@@ -880,8 +870,7 @@ app.post("/admin/user/:slug/bundle/add", requireAdmin, (req, res) => {
 app.post("/admin/user/:slug/bundle/update", requireAdmin, (req, res) => {
   const u = getUser(req.params.slug);
   const idx = parseInt(req.body.idx, 10);
-  if (!u || !isFinite(idx) || (!u.customBundles?.[idx] && u.customBundles?.[idx] !== ""))
-    return res.status(400).send("index ผิด");
+  if (!u || !isFinite(idx) || !u.customBundles?.[idx]) return res.status(400).send("index ผิด");
   u.customBundles[idx] = sanitize(req.body.bundle || "");
   saveUser(req.params.slug, u);
   res.redirect("/admin/user/" + req.params.slug);
@@ -889,8 +878,8 @@ app.post("/admin/user/:slug/bundle/update", requireAdmin, (req, res) => {
 app.post("/admin/user/:slug/bundle/delete", requireAdmin, (req, res) => {
   const u = getUser(req.params.slug);
   const idx = parseInt(req.body.idx, 10);
-  if (!u || !isFinite(idx)) return res.status(400).send("index ผิด");
-  (u.customBundles || []).splice(idx, 1);
+  if (!u || !isFinite(idx) || !u.customBundles?.[idx]) return res.status(400).send("index ผิด");
+  u.customBundles.splice(idx, 1);
   saveUser(req.params.slug, u);
   res.redirect("/admin/user/" + req.params.slug);
 });
@@ -939,243 +928,240 @@ app.post("/admin/user/:slug/gallery/del", requireAdmin, (req, res) => {
   res.redirect("/admin/user/" + req.params.slug);
 });
 
-// ===== Client renderer (Mobile-first + Fonts + Sandbox Islands) =====
+// ===== Client renderer =====
 function renderClientHTML(cfg) {
   const title = `${cfg.profile?.displayName || "Bio Link"} — โปรไฟล์ & ลิงก์`;
-  const desc  = cfg.profile?.bio || "บิโอลิงก์ ยิงพิกเซลหลายตัว เพิ่มลิงก์ได้ไม่อั้น";
-  const og    = cfg.profile?.cover || cfg.profile?.avatar || "https://picsum.photos/1200/630";
-
+  const desc = cfg.profile?.bio || "บิโอลิงก์ ยิงพิกเซลหลายตัว เพิ่มลิงก์ได้ไม่อั้น";
+  const og = cfg.profile?.cover || cfg.profile?.avatar || "https://picsum.photos/1200/630";
   const bg = cfg.profile?.background || {};
+  const gtmNoscript = (cfg.pixelsSimple?.gtm || [])
+    .filter(Boolean)
+    .map(
+      (id) =>
+        `<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=${id}" height=0 width=0 style="display:none;visibility:hidden"></iframe></noscript>`
+    )
+    .join("\n");
   const bgStyle =
     bg.type === "image" && bg.image
       ? `background-image:url('${bg.image}'); background-size:cover; background-position:center;`
       : `background-image:linear-gradient(to bottom, ${bg.from || "#0f172a"}, ${bg.to || "#020617"});`;
 
-  const fontLinks = Array.isArray(cfg.ui?.fontLinks) ? cfg.ui.fontLinks : [];
-  const fontFamily =
-    (cfg.ui?.fontFamily || "").trim() ||
-    `system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Thai", "Prompt", "Inter", Arial, sans-serif`;
-
-  const gtmNoscript = (cfg.pixelsSimple?.gtm || [])
-    .filter(Boolean)
-    .map(
-      (id) =>
-        `<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=${id}" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>`
-    )
-    .join("\n");
-
-  // Code Islands (Sandbox each bundle + auto-resize)
-  const bundles = Array.isArray(cfg.customBundles) ? cfg.customBundles : [];
-  const islandsHTML = bundles
-    .map((code, i) => {
-      const id = `island_${i}`;
-      const links = fontLinks.map((href) => `<link rel="stylesheet" href="${href}">`).join("");
-      const srcdoc = `
-<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-${links}
-<style>html,body{margin:0;padding:0;background:transparent;color:inherit}*,*::before,*::after{box-sizing:border-box}</style>
-</head><body>
-${code}
-<script>
-const send=()=>{const h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight,80);parent.postMessage({type:'ISLAND_RESIZE',id:'${id}',height:h},'*');};
-new ResizeObserver(send).observe(document.documentElement);
-window.addEventListener('load',send); setTimeout(send,50);
-</script>
-</body></html>`.replace(/<\/script>/g, "<\\/script>");
-      return `<iframe id="${id}" class="island" title="bundle-${i}" loading="lazy" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" srcdoc="${srcdoc.replace(/"/g, "&quot;")}"></iframe>`;
-    })
-    .join("");
-
-  const galleryHTML =
-    (cfg.gallery || []).length
-      ? `<section class="gallery">
-          ${(cfg.gallery || [])
-            .map((u) => `<img src="${u}" alt="" loading="lazy" referrerpolicy="no-referrer" class="gimg">`)
-            .join("")}
-        </section>`
-      : "";
-
-  const linksHTML = (cfg.links || [])
-    .map((l, i) => {
-      try {
-        const u = new URL(l.url);
-        if (l.utm) Object.entries(l.utm).forEach(([k, v]) => { if (v) u.searchParams.set(k, v); });
-        const badge = l.badge ? `<span class="badge">${l.badge}</span>` : "";
-        return `<a href="${u.toString()}" data-href="${u.toString()}"
-                  class="card ${l.highlight ? "hi" : ""}"
-                  data-event="${l.eventName || "LinkClick"}"
-                  data-title="${(l.title || "Link") + i}"
-                  target="_blank" rel="noopener">
-                  <div class="ico">${l.icon || "🔗"}</div>
-                  <div class="meta">
-                    <div class="ttl">${l.title || ""} ${badge}</div>
-                    <div class="sub">${u.hostname}</div>
-                  </div>
-                  <div class="arr">↗</div>
-                </a>`;
-      } catch { return ""; }
-    })
-    .join("");
-
-  return `<!doctype html><html lang="th">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  return `<!doctype html><html lang=th><head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1">
 <title>${title}</title>
-<meta name="description" content="${desc}">
-<meta property="og:type" content="website">
-<meta property="og:title" content="${title}">
-<meta property="og:description" content="${desc}">
-<meta property="og:image" content="${og}">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="${title}">
-<meta name="twitter:description" content="${desc}">
-<meta name="twitter:image" content="${og}">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-${fontLinks.map((href) => `<link rel="stylesheet" href="${href}">`).join("")}
-<script src="https://cdn.tailwindcss.com"></script>
+<meta name=description content="${desc}">
+<meta property=og:type content=website>
+<meta property=og:title content="${title}">
+<meta property=og:description content="${desc}">
+<meta property=og:image content="${og}">
+<meta name=twitter:card content=summary_large_image>
+<meta name=twitter:title content="${title}">
+<meta name=twitter:description content="${desc}">
+<meta name=twitter:image content="${og}">
+<link rel=preconnect href=https://fonts.googleapis.com><link rel=preconnect href=https://fonts.gstatic.com crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel=stylesheet>
+<script src=https://cdn.tailwindcss.com></script>
 <style>
-  *,*::before,*::after{box-sizing:border-box}
-  html{font-size:16px}
-  :root{
-    --text:#e5e7eb; --muted:#a1a1aa; --accent:#a78bfa; --ring:rgba(167,139,250,.6);
-    --card:rgba(255,255,255,.06); --card-hover:rgba(255,255,255,.12); --radius:16px;
-    --max: 760px; --gap: clamp(10px, 2.5vw, 14px);
-  }
-  [data-theme="emerald"]{--accent:#34d399;--ring:rgba(52,211,153,.6)}
-  [data-theme="crimson"]{--accent:#ef4444;--ring:rgba(239,68,68,.6)}
-
-  body{
-    margin:0;
-    min-height:100dvh;
-    font-family:${fontFamily};
-    -webkit-font-smoothing:antialiased;
-    color:var(--text);
-    ${bgStyle}
-    padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
-    display:flex; flex-direction:column; align-items:center;
-  }
-
-  .wrap{ width:100%; max-width:var(--max); display:flex; flex-direction:column; gap:var(--gap); }
-  .hdr{display:flex; align-items:center; gap:12px}
-  .title{font-weight:600; font-size:clamp(18px, 3.8vw, 24px)}
-  .desc{font-size:clamp(12px, 2.8vw, 14px); color:var(--muted)}
-
-  .gallery{ display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
-  .gimg{width:100%; height:95px; object-fit:cover; border-radius:12px; display:block}
-
-  .cards{display:flex; flex-direction:column; gap:10px}
-  .card{
-    display:flex; align-items:center; gap:12px; width:100%;
-    padding:12px; border-radius:var(--radius);
-    background:var(--card); backdrop-filter:blur(10px);
-    border:1px solid rgba(255,255,255,.08);
-    text-decoration:none; color:inherit; transition:transform .15s ease, background .15s ease, box-shadow .15s ease;
-  }
-  .card:hover{ transform:translateY(-1px); background:var(--card-hover); box-shadow:0 0 0 2px var(--ring) }
-  .card.hi{ box-shadow:0 0 0 2px var(--ring) }
-  .ico{ font-size:clamp(18px, 4.5vw, 22px) }
-  .meta{ flex:1; min-width:0 }
-  .ttl{ font-weight:600; font-size:clamp(14px, 3.6vw, 16px); display:flex; align-items:center; gap:6px }
-  .badge{ display:inline-block; font-size:10px; padding:2px 6px; border-radius:8px; color:var(--accent); background:color-mix(in lab, var(--accent) 14%, transparent); }
-  .sub{ color:var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-  .arr{ opacity:.8 }
-
-  .island{ width:100%; min-height:120px; border:0; background:transparent; border-radius:12px; overflow:hidden }
-
-  footer{ margin-top:auto; text-align:center; font-size:12px; color:#fff8; padding:8px 0 }
-
-  @media (min-width: 420px){ .gimg{height:110px} }
-  @media (min-width: 640px){ .gimg{height:130px} }
+  :root{--bg-from:#0f172a;--bg-to:#020617;--card:rgba(255,255,255,.06);--card-hover:rgba(255,255,255,.12);--accent:#a78bfa;--text:#e5e7eb;--muted:#a1a1aa;--ring:rgba(167,139,250,.6)}
+  [data-theme="emerald"]{--accent:#34d399;--ring:rgba(52,211,153,.6);--bg-from:#052e2b;--bg-to:#031a18}
+  [data-theme="crimson"]{--accent:#ef4444;--ring:rgba(239,68,68,.6);--bg-from:#2a0b10;--bg-to:#180507}
+  body{font-family:Prompt,system-ui;-webkit-font-smoothing:antialiased;min-height:100dvh;display:flex;flex-direction:column}
+  .glass{background:var(--card);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.08)}
+  .link-card{transition:transform .15s ease, box-shadow .15s ease, background .15s ease; cursor: pointer;}
+  .link-card:hover{transform:translateY(-1px);background:var(--card-hover);box-shadow:0 0 0 2px var(--ring)}
+  .shine{position:relative;overflow:hidden}
+  .shine:before{content:"";position:absolute;inset:-200%;background:conic-gradient(from 180deg, transparent 0 340deg, rgba(255,255,255,.12) 360deg);animation:spin 6s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  footer{margin-top:auto}
 </style>
 ${cfg.customHead || ""}
 </head>
-
-<body data-theme="${cfg.theme || "violet"}">
+<body class="text-[color:var(--text)]" data-theme="${cfg.theme || "violet"}" style="${bgStyle}">
 ${gtmNoscript}
+  ${
+    (cfg.gallery || []).length
+      ? `<section class="mt-3 grid grid-cols-2 gap-1.5">${(cfg.gallery || [])
+          .map((u) => `<img src="${u}" class="w-full h-24 object-cover rounded-lg" loading="lazy" referrerpolicy="no-referrer">`)
+          .join("")}</section>`
+      : ""
+  }
 
-<main class="wrap">
-  ${(cfg.profile?.displayName || cfg.profile?.bio)
-    ? `<header class="hdr">
-         <div>
-           ${cfg.profile?.displayName ? `<div class="title">${cfg.profile.displayName}</div>` : ``}
-           ${cfg.profile?.bio ? `<div class="desc">${cfg.profile.bio}</div>` : ``}
-         </div>
-       </header>`
-    : ``}
-
-  ${galleryHTML}
-
-  <section id="links" class="cards">
-    ${linksHTML}
+  <section id="links" class="mt-3 grid gap-1.5">
+    ${(cfg.links || [])
+      .map((l, i) => {
+        try {
+          const u = new URL(l.url);
+          if (l.utm) Object.entries(l.utm).forEach(([k, v]) => { if (v) u.searchParams.set(k, v); });
+          const badge = l.badge
+            ? `<span class="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-[color:var(--accent)]/10 text-[color:var(--accent)]">${l.badge}</span>`
+            : "";
+          return `<a href="${u.toString()}" data-href="${u.toString()}"
+                    class="link-card glass rounded-xl p-2.5 flex items-center gap-2.5 ${l.highlight ? "ring-2 ring-[color:var(--accent)]" : ""}"
+                    data-event="${l.eventName || "LinkClick"}"
+                    data-title="${(l.title || "Link") + i}"
+                    target="_blank" rel="noopener">
+            <div class="text-xl">${l.icon || "🔗"}</div>
+            <div class="flex-1 min-w-0">
+              <div class="font-medium truncate">${l.title || ""} ${badge}</div>
+              <div class="text-xs text-[color:var(--muted)] break-all">${u.hostname}</div>
+            </div>
+            <div class="text-sm opacity-80">↗</div></a>`;
+        } catch { return ""; }
+      }).join("")}
   </section>
-
-  ${islandsHTML}
-
-  ${cfg.footer ? `<footer>${cfg.footer}</footer>` : ``}
 </main>
 
-<script>
-// auto-resize islands
-window.addEventListener('message', (e)=>{
-  if(!e?.data || e.data.type!=='ISLAND_RESIZE') return;
-  const el = document.getElementById(e.data.id);
-  if(el){ el.style.height = Math.max(80, e.data.height) + 'px'; }
-});
-</script>
+<footer class="mt-3 mb-3 text-center text-xs text-white/80">${cfg.footer || ""}</footer>
 
+<div id=consent class="fixed inset-x-0 bottom-2 mx-auto max-w-xl glass rounded-xl p-2.5 shadow hidden">
+  <div class="text-sm">เราใช้คุกกี้เพื่อวิเคราะห์และปรับปรุงประสบการณ์ของคุณ ยอมรับการวัดผลโฆษณาหรือไม่?</div>
+  <div class="mt-1.5 flex gap-1.5 justify-end">
+    <button id=deny class="px-3 py-1.5 rounded bg-white/10">ปฏิเสธ</button>
+    <button id=allow class="px-3 py-1.5 rounded bg-[color:var(--accent)]">ยอมรับ</button>
+  </div>
+</div>
+
+${(cfg.customBundles || []).join("\n")}
 ${cfg.customBodyEnd || ""}
 
 <script>
-// ===== Universal Link Tracking (short) =====
-function getCookie(n){return document.cookie.split('; ').find(x=>x.startsWith(n+'='))?.split('=')[1]||'';}
-function getFbp(){ return getCookie('_fbp')||''; }
-function getFbc(){ const fbclid=new URLSearchParams(location.search).get('fbclid'); if(fbclid) return \`fb.1.\${Date.now()}.\${fbclid}\`; return getCookie('_fbc')||''; }
-function beacon(url,payload){ try{ if(navigator.sendBeacon){ const d=new Blob([JSON.stringify(payload)],{type:'application/json'}); navigator.sendBeacon(url,d); return; } fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),keepalive:true}); }catch{} }
-function track(name, params={}, userData={}){ const event_id=(crypto?.randomUUID?.()||(Date.now().toString(36)+Math.random().toString(36).slice(2))).slice(0,36); beacon('/api/track',{name,params,event_id,url:location.href,user_data:{fbp:getFbp()||undefined,fbc:getFbc()||undefined,external_id:userData.external_id,email:userData.email,phone:userData.phone}}); try{window.fbq&&fbq('trackCustom',name,{...params,event_id});}catch{} try{window.ttq&&ttq.track(name,{...params,event_id});}catch{} try{window.gtag&&gtag('event',name,{...params,event_id});}catch{} try{window.dataLayer&&window.dataLayer.push({event:name,event_id,...params});}catch{} return event_id; }
-document.addEventListener('click', (e)=>{ const a=e.target.closest('a[href]'); if(!a||a.closest('[data-no-track]'))return; const label=(a.dataset.title||(a.textContent||'').trim()).slice(0,80); track(a.dataset.event||'LinkClick',{label,to:a.href}); }, {capture:true});
-document.addEventListener('auxclick', (e)=>{ if(e.button!==1) return; const el=e.target.closest('[data-href],a[href]'); if(!el) return; const to=el.getAttribute('href')||el.dataset.href; const label=(el.dataset.title||(el.textContent||'').trim()).slice(0,80); track(el.dataset.event||'LinkClick',{label,to}); }, {capture:true});
+  // Theme switch
+  const themes=['violet','emerald','crimson'], btn=document.getElementById('themeBtn');
+  if(btn){ btn.onclick=()=>{ const i=themes.indexOf(document.body.getAttribute('data-theme')); const next=themes[(i+1)%themes.length]; document.body.setAttribute('data-theme',next); }; }
+
+  // Consent
+  const consentKey='bio_consent'; const box=document.getElementById('consent');
+  const consent=localStorage.getItem(consentKey); if(consent===null && box){ box.classList.remove('hidden'); }
+  document.getElementById('deny')?.addEventListener('click',()=>{ localStorage.setItem(consentKey,'0'); box.remove(); });
+  document.getElementById('allow')?.addEventListener('click',()=>{ localStorage.setItem(consentKey,'1'); box.remove(); loadPixels(); });
 </script>
 
 <script>
-// ===== Simple pixel loader =====
-const __SIMPLE = ${JSON.stringify({
-  facebook: (cfg.pixelsSimple?.facebook || []).filter(Boolean),
-  tiktok: (cfg.pixelsSimple?.tiktok || []).filter(Boolean),
-  ga4: (cfg.pixelsSimple?.ga4 || []).filter(Boolean),
-  gtm: (cfg.pixelsSimple?.gtm || []).filter(Boolean),
-  googleAds: (cfg.pixelsSimple?.googleAds || []).filter(Boolean),
-  twitter: (cfg.pixelsSimple?.twitter || []).filter(Boolean),
-})};
+// ===== Universal Link Tracking (non-blocking) + fbp/fbc helper =====
+function getCookie(n){return document.cookie.split('; ').find(x=>x.startsWith(n+'='))?.split('=')[1]||'';}
+function getFbp(){ return getCookie('_fbp')||''; }
+function getFbc(){
+  const fbclid=new URLSearchParams(location.search).get('fbclid');
+  if(fbclid) return \`fb.1.\${Date.now()}.\${fbclid}\`;
+  return getCookie('_fbc')||'';
+}
+function beacon(url, payload){
+  try{
+    if(navigator.sendBeacon){
+      const data = new Blob([JSON.stringify(payload)], {type:'application/json'});
+      navigator.sendBeacon(url, data);
+      return true;
+    }
+    fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),keepalive:true});
+  }catch(e){}
+}
+function track(name, params={}, userData={}){
+  const event_id=(crypto?.randomUUID?.()||(Date.now().toString(36)+Math.random().toString(36).slice(2))).slice(0,36);
+  const payload={
+    name,
+    params,
+    event_id,
+    url: location.href,
+    user_data: {
+      fbp: getFbp() || undefined,
+      fbc: getFbc() || undefined,
+      external_id: userData.external_id,
+      email: userData.email,
+      phone: userData.phone
+    }
+  };
+  beacon('/api/track', payload);
 
-(function loadPixels(){
-  (__SIMPLE.gtm||[]).forEach(id=>{
-    (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start': new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0], j=d.createElement(s), dl=l!='dataLayer'?'&l='+l:''; j.async=true; j.src='https://www.googletagmanager.com/gtm.js?id='+encodeURIComponent(i)+dl; f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer',id);
-  });
-  const firstGtag=(__SIMPLE.ga4||[])[0]||(__SIMPLE.googleAds||[])[0];
-  if(firstGtag){
-    const s=document.createElement('script'); s.async=true; s.src='https://www.googletagmanager.com/gtag/js?id='+encodeURIComponent(firstGtag); document.head.appendChild(s);
-    window.dataLayer=window.dataLayer||[]; function gtag(){dataLayer.push(arguments);} window.gtag=gtag; gtag('js', new Date());
-    (__SIMPLE.ga4||[]).forEach(id=> gtag('config', id));
-    (__SIMPLE.googleAds||[]).forEach(id=> gtag('config', id));
+  try{ window.fbq && fbq('trackCustom', name, {...params, event_id}); }catch(e){}
+  try{ window.ttq && ttq.track(name, {...params, event_id}); }catch(e){}
+  try{ window.gtag && gtag('event', name, {...params, event_id}); }catch(e){}
+  try{ window.dataLayer && window.dataLayer.push({event:name, event_id, ...params}); }catch(e){}
+  return event_id;
+}
+
+// Track <a href> without blocking navigation
+document.addEventListener('click', function(e){
+  const a = e.target.closest('a[href]');
+  if(!a) return;
+  if(a.closest('[data-no-track]')) return;
+  const label=(a.dataset.title || (a.textContent||'').trim()).slice(0,80);
+  track(a.dataset.event || 'LinkClick', {label, to:a.href});
+}, {capture:true});
+
+// Support any non-<a> with data-href (if you add custom buttons)
+document.addEventListener('click', function(e){
+  const el = e.target.closest('[data-href]');
+  if(!el) return;
+  if (el.matches('a[href]')) return; // let normal <a> flow
+  e.preventDefault();
+  const to = el.dataset.href;
+  const label=(el.dataset.title || (el.textContent||'').trim()).slice(0,80);
+  track(el.dataset.event || 'LinkClick', {label, to});
+  const a=document.createElement('a'); a.href=to; a.target='_blank'; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove();
+});
+
+// Middle-click tracking too (no blocking)
+document.addEventListener('auxclick', function(e){
+  if(e.button!==1) return;
+  const el = e.target.closest('[data-href],a[href]');
+  if(!el) return;
+  const to = el.getAttribute('href') || el.dataset.href;
+  const label=(el.dataset.title || (el.textContent||'').trim()).slice(0,80);
+  track(el.dataset.event || 'LinkClick', {label, to});
+}, {capture:true});
+</script>
+
+<script>
+  // Injected arrays directly from server (safe)
+  const __SIMPLE = ${JSON.stringify({
+    facebook: (cfg.pixelsSimple?.facebook || []).filter(Boolean),
+    tiktok: (cfg.pixelsSimple?.tiktok || []).filter(Boolean),
+    ga4: (cfg.pixelsSimple?.ga4 || []).filter(Boolean),
+    gtm: (cfg.pixelsSimple?.gtm || []).filter(Boolean),
+    googleAds: (cfg.pixelsSimple?.googleAds || []).filter(Boolean),
+    twitter: (cfg.pixelsSimple?.twitter || []).filter(Boolean),
+  })};
+
+  function loadPixels(){
+    if(localStorage.getItem('bio_consent')!=='1') return;
+
+    // GTM
+    (__SIMPLE.gtm||[]).forEach(id=>{
+      (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start': new Date().getTime(),event:'gtm.js'});
+      var f=d.getElementsByTagName(s)[0], j=d.createElement(s), dl=l!='dataLayer'?'&l='+l:'';
+      j.async=true; j.src='https://www.googletagmanager.com/gtm.js?id='+encodeURIComponent(i)+dl;
+      f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer',id);
+    });
+
+    // GA4 + Google Ads via gtag
+    const firstGtag = (__SIMPLE.ga4||[])[0] || (__SIMPLE.googleAds||[])[0];
+    if(firstGtag){
+      const s=document.createElement('script'); s.async=true; s.src='https://www.googletagmanager.com/gtag/js?id='+encodeURIComponent(firstGtag); document.head.appendChild(s);
+      window.dataLayer=window.dataLayer||[]; function gtag(){dataLayer.push(arguments);} window.gtag=gtag; gtag('js', new Date());
+      (__SIMPLE.ga4||[]).forEach(id=> gtag('config', id));
+      (__SIMPLE.googleAds||[]).forEach(id=> gtag('config', id));
+    }
+
+    // Facebook Pixel
+    if((__SIMPLE.facebook||[]).length){
+      !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod? n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window, document,'script','https://connect.facebook.net/en_US/fbevents.js');
+      (__SIMPLE.facebook||[]).forEach(id=>{ try{ fbq('init', id); }catch(e){} });
+      try{ fbq('track','PageView'); }catch(e){}
+    }
+
+    // TikTok
+    if((__SIMPLE.tiktok||[]).length){
+      !function (w, d, t) { w.TiktokAnalyticsObject = t; var ttq = w[t] = w[t] || []; ttq.methods = ['page', 'track', 'identify', 'instances', 'debug', 'on', 'off', 'once', 'ready', 'alias', 'group', 'enableCookie', 'disableCookie'], ttq.setAndDefer = function (t, e) { t[e] = function () { t.push([e].concat(Array.prototype.slice.call(arguments, 0))) } }; for (var i = 0; i < ttq.methods.length; i++) ttq.setAndDefer(ttq, ttq.methods[i]); ttq.instance = function (t) { for (var e = ttq._i[t] || [], n = 0; n < ttq.methods.length; n++) ttq.setAndDefer(e, ttq.methods[n]); return e }, ttq.load = function (e, n) { var i = 'https://analytics.tiktok.com/i18n/pixel/events.js'; ttq._i = ttq._i || {}, ttq._i[e] = []; ttq._t = ttq._t || {}; ttq._t[e] = +new Date; ttq._o[e] = n || {}; var o = document.createElement('script'); o.type = 'text/javascript'; o.async = !0; o.src = i + '?sdkid=' + e + '&lib=' + t; var a = document.getElementsByTagName('script')[0]; a.parentNode.insertBefore(o, a) }; }(window, document, 'ttq');
+      (__SIMPLE.tiktok||[]).forEach(id=>{ try{ ttq.load(id); ttq.page(); }catch(e){} });
+    }
+
+    // Twitter/X
+    if((__SIMPLE.twitter||[]).length){
+      !function(e,t,n,s,u,a){e.twq||(s=e.twq=function(){s.exe?s.exe.apply(s,arguments):s.queue.push(arguments);},s.version='1.1',s.queue=[],u=t.createElement(n),u.async=!0,u.src='https://static.ads-twitter.com/uwt.js',a=t.getElementsByTagName(n)[0],a.parentNode.insertBefore(u,a))}(window,document,'script');
+      (__SIMPLE.twitter||[]).forEach(id=>{ try{ twq('init', id); }catch(e){} });
+      try{ twq('track','PageView'); }catch(e){}
+    }
   }
-  if((__SIMPLE.facebook||[]).length){
-    !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod? n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window, document,'script','https://connect.facebook.net/en_US/fbevents.js');
-    (__SIMPLE.facebook||[]).forEach(id=>{ try{ fbq('init', id); }catch(e){} });
-    try{ fbq('track','PageView'); }catch(e){}
-  }
-  if((__SIMPLE.tiktok||[]).length){
-    !function (w, d, t) { w.TiktokAnalyticsObject = t; var ttq = w[t] = w[t] || []; ttq.methods = ['page', 'track', 'identify', 'instances', 'debug', 'on', 'off', 'once', 'ready', 'alias', 'group', 'enableCookie', 'disableCookie'], ttq.setAndDefer = function (t, e) { t[e] = function () { t.push([e].concat(Array.prototype.slice.call(arguments, 0))) } }; for (var i = 0; i < ttq.methods.length; i++) ttq.setAndDefer(ttq, ttq.methods[i]); ttq.instance = function (t) { for (var e = ttq._i[t] || [], n = 0; n < ttq.methods.length; n++) ttq.setAndDefer(e, ttq.methods[n]); return e }, ttq.load = function (e, n) { var i = 'https://analytics.tiktok.com/i18n/pixel/events.js'; ttq._i = ttq._i || {}, ttq._i[e] = []; ttq._t = ttq._t || {}; ttq._t[e] = +new Date; ttq._o[e] = n || {}; var o = document.createElement('script'); o.type = 'text/javascript'; o.async = !0; o.src = i + '?sdkid=' + e + '&lib=' + t; var a = document.getElementsByTagName('script')[0]; a.parentNode.insertBefore(o, a) }; }(window, document, 'ttq');
-    (__SIMPLE.tiktok||[]).forEach(id=>{ try{ ttq.load(id); ttq.page(); }catch(e){} });
-  }
-  if((__SIMPLE.twitter||[]).length){
-    !function(e,t,n,s,u,a){e.twq||(s=e.twq=function(){s.exe?s.exe.apply(s,arguments):s.queue.push(arguments);},s.version='1.1',s.queue=[],u=t.createElement(n),u.async=!0,u.src='https://static.ads-twitter.com/uwt.js',a=t.getElementsByTagName(n)[0],a.parentNode.insertBefore(u,a))}(window,document,'script');
-    (__SIMPLE.twitter||[]).forEach(id=>{ try{ twq('init', id); }catch(e){} });
-    try{ twq('track','PageView'); }catch(e){}
-  }
-})();
+  if(localStorage.getItem('bio_consent')==='1'){ loadPixels(); }
 </script>
 </body></html>`;
 }
@@ -1209,7 +1195,7 @@ app.post("/api/track", async (req, res) => {
     const url = req.body?.url || "";
     const event_id = req.body?.event_id || uuidv4();
 
-    // detect owner by URL path
+    // detect page owner (user or tenant) by referrer path if available
     const path = new URL(url, "http://x").pathname || "/";
     const seg = path.split("/").filter(Boolean);
     let cfg = null;
@@ -1227,8 +1213,9 @@ app.post("/api/track", async (req, res) => {
     const user_agent = req.headers["user-agent"] || "";
     const now = Math.floor(Date.now() / 1000);
 
+    // ---- Build user_data for CAPI (hash PII) ----
     const rawUD = req.body?.user_data || {};
-    const H = (x) => (x ? sha256(x) : undefined);
+    function H(x){ return x ? sha256(x) : undefined; }
     const user_data = {
       client_ip_address: client_ip,
       client_user_agent: user_agent,
@@ -1268,7 +1255,7 @@ app.post("/api/track", async (req, res) => {
       );
     }
 
-    // GA4
+    // GA4 Measurement Protocol
     for (const g of cfg.pixelsAdvanced?.ga4 || []) {
       const { measurementId, apiSecret } = g || {};
       if (!measurementId || !apiSecret) continue;
@@ -1276,9 +1263,7 @@ app.post("/api/track", async (req, res) => {
       tasks.push(
         axios
           .post(
-            `https://www.google-analytics.com/mp/collect?measurement_id=${encodeURIComponent(
-              measurementId
-            )}&api_secret=${encodeURIComponent(apiSecret)}`,
+            `https://www.google-analytics.com/mp/collect?measurement_id=${encodeURIComponent(measurementId)}&api_secret=${encodeURIComponent(apiSecret)}`,
             body
           )
           .catch((e) => ({ error: e?.response?.data || e.message }))
@@ -1314,5 +1299,5 @@ app.post("/api/track", async (req, res) => {
 
 // ===== Start =====
 app.listen(PORT, () => {
-  console.log("BioLink Multi-Pixel v4.7 running on http://localhost:" + PORT);
+  console.log("BioLink Multi-Pixel v4.6 running on http://localhost:" + PORT);
 });
