@@ -47,7 +47,7 @@ function defaultTenantConfig() {
         "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?q=80&w=1200&auto=format&fit=crop",
       background: { type: "gradient", from: "#0f172a", to: "#020617", image: "" },
     },
-    footer: "© 2025 The #1 betting website in Thailand",
+    footer: "",
     badges: [{ text: "โปรแรงวันนี้", href: "#promo", emoji: "🔥" }],
 
     pixelsSimple: {
