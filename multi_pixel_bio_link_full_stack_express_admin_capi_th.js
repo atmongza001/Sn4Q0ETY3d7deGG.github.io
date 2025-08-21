@@ -39,12 +39,12 @@ function defaultTenantConfig() {
   return {
     theme: "violet",
     profile: {
-      displayName: "แสงคำบ้านทุ่ง",
-      bio: "รวมลิงก์ทางการ ยิงแอด เก็บคอนเวอร์ชันครบ",
+      displayName: "shopee",
+      bio: "ซื้อทุกอย่างที่ Shopee ช้อปปี้ ช้อปปิ้งออนไลน์ยอดนิยม รวมสินค้ามากมาย มีโค้ดส่วนลดจัดเต็ม อัพเดททุกวัน ช้อปเลย Shopee เพลิดเพลินกับการช้อปปิ้งออนไลน์ แบบไม่มีสะดุด สินค้าหลากหลาย มีทุกหมวดหมู่ ช้อปเลย ช้อปปิ้งออนไลน์ Shopee ช้อปง่าย...",
       avatar:
-        "https://images.unsplash.com/photo-1588167056540-c9f2c5d4f04b?q=80&w=256&auto=format&fit=crop",
+        "https://img2.pic.in.th/pic/4a5ec8baa41984eebc7a4ecc10db3d80.png",
       cover:
-        "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?q=80&w=1200&auto=format&fit=crop",
+        "https://img2.pic.in.th/pic/4a5ec8baa41984eebc7a4ecc10db3d80.png",
       background: { type: "gradient", from: "#0f172a", to: "#020617", image: "" },
     },
     footer: "",
