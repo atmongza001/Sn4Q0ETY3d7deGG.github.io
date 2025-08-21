@@ -205,8 +205,14 @@ ${(cfg.customBundles||[]).map((c,i)=>`
 <p><a href="/admin/${t}" style="color:cyan">← กลับ Admin</a></p>`);
 });
 
+/* ---------------- Health Check ---------------- */
+app.get('/healthz', (req, res) => {
+  res.set('Cache-Control', 'no-store'); // กัน cache
+  res.status(200).type('text/plain').send('OK');
+});
+
 /* ---------------- Client ---------------- */
-app.get("/:tenant", (req, res) => {
+app.get('/:tenant', (req, res) => {
   const t = req.params.tenant;
   const cfg = getTenantConfig(t);
   res.type("html").send(`<!doctype html><meta charset=utf-8>
@@ -236,3 +242,4 @@ const PUBLIC_URL =
 app.listen(PORT, HOST, () => {
   console.log(`BioLink Multi-Pixel v4.x running on ${PUBLIC_URL}`);
 });
+
