@@ -1,26 +1,19 @@
 {
-  "name": "biolink",
+  "name": "bio-admin",
   "version": "1.0.0",
+  "description": "",
   "main": "multi_pixel_bio_link_full_stack_express_admin_capi_th.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node multi_pixel_bio_link_full_stack_express_admin_capi_th.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@netlify/blobs": "^10.0.8",
-    "axios": "^1.11.0",
-    "bcryptjs": "^3.0.2",
-    "body-parser": "^2.2.0",
-    "cookie-parser": "^1.4.7",
-    "dayjs": "^1.11.13",
-    "dotenv": "^17.2.1",
-    "express": "^5.1.0",
-    "nanoid": "^5.1.5",
-    "sanitize-html": "^2.17.0",
-    "serverless-http": "^3.2.0",
-    "uuid": "^11.1.0"
-  },
-  "description": ""
+    "body-parser": "^1.20.2",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2",
+    "sanitize-html": "^2.13.0"
+  }
 }
