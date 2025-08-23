@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Game Catalog</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial,sans-serif;background:#0b0f14;color:#e6eef7;margin:0}
+    .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
+    .head{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
+    input{flex:1;padding:10px 12px;border-radius:8px;border:1px solid #243041;background:#111826;color:#e6eef7}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
+    .card{background:#0f1622;border:1px solid #1e2b3a;border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+    .thumb{aspect-ratio:16/9;background:#0b1220;display:block;width:100%;object-fit:cover}
+    .meta{padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+    .title{font-weight:600;line-height:1.2}
+    .pill{font-size:12px;opacity:.8}
+    .row{display:flex;justify-content:space-between;align-items:center}
+    .btn{cursor:pointer;background:#2d6cdf;border:none;color:white;padding:8px 10px;border-radius:10px}
+    .btn:hover{filter:brightness(1.1)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <h2 style="margin:0">เกมทั้งหมด</h2>
+      <input id="q" placeholder="ค้นหาเกม..." />
+    </div>
+    <div id="grid" class="grid"></div>
+  </div>
+
+  <script>
+    const grid = document.getElementById('grid');
+    const q = document.getElementById('q');
+
+    let games = [];
+    async function load() {
+      const res = await fetch('/data/gamesList.json'); // 👉 วางไฟล์ไว้ public/data/gamesList.json
+      const json = await res.json();
+      games = json?.data?.list ?? [];
+      render(games);
+    }
+
+    function card(g){
+      return `
+      <div class="card">
+        <img class="thumb" src="${g.image||''}" alt="">
+        <div class="meta">
+          <div class="title">${g.description||'Untitled'}</div>
+          <div class="row">
+            <span class="pill">${(g.categories||[]).join(', ')||'uncat'}</span>
+            <button class="btn" data-game="${g.gameId}">เล่น</button>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    function render(list){
+      grid.innerHTML = list.map(card).join('');
+      grid.querySelectorAll('.btn').forEach(btn=>{
+        btn.addEventListener('click', async ()=>{
+          const gameId = btn.dataset.game;
+          const playerId = 'demoUser'; // 👉 ใส่ไอดีผู้เล่นของคุณ
+          try{
+            const res = await fetch('/api/launch', {
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({ gameId, playerId })
+            });
+            const data = await res.json();
+            if(data?.launchUrl){ location.href = data.launchUrl; }
+            else alert(data?.error || 'ไม่พบลิงก์เข้าเกม');
+          }catch(e){ alert('เรียก /api/launch ไม่สำเร็จ'); }
+        });
+      });
+    }
+
+    q.addEventListener('input', e=>{
+      const term = e.target.value.toLowerCase().trim();
+      const filtered = games.filter(g => (g.description||'').toLowerCase().includes(term));
+      render(filtered);
+    });
+
+    load();
+  </script>
+</body>
+</html>
