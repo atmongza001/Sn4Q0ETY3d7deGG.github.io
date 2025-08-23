@@ -35,7 +35,7 @@
 
     let games = [];
     async function load() {
-      const res = await fetch('/data/gamesList.json'); // 👉 วางไฟล์ไว้ public/data/gamesList.json
+      const res = await fetch('gamesList.json'); // 👉 วางไฟล์ไว้ gamesList.json
       const json = await res.json();
       games = json?.data?.list ?? [];
       render(games);
@@ -60,7 +60,7 @@
       grid.querySelectorAll('.btn').forEach(btn=>{
         btn.addEventListener('click', async ()=>{
           const gameId = btn.dataset.game;
-          const playerId = 'demoUser'; // 👉 ใส่ไอดีผู้เล่นของคุณ
+          const playerId = 'mozart'; // 👉 ใส่ไอดีผู้เล่นของคุณ
           try{
             const res = await fetch('/api/launch', {
               method:'POST',
